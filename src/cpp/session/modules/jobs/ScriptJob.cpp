@@ -112,35 +112,52 @@ void ScriptJob::start()
    }
 
    std::string path;
+   std::string encoding = "UTF-8";
+   std::string code = string_utils::systemToUtf8(spec_.code());
    if (spec_.code().empty())
    {
       // no code specified to run, so we're running an R script
       path = spec_.path().getAbsolutePath();
+      std::shared_ptr<std::istream> inputStream;
+      error = spec_.path().openForRead(inputStream);
+      // copy script to file so we can use utf8 and don't have to worry about unknown characters
+      if (!error)
+      {
+         // set exception mask (required for proper reporting of errors)
+         inputStream->exceptions(std::istream::failbit | std::istream::badbit);
+
+         // copy file to string stream
+         std::ostringstream ostr;
+         boost::iostreams::copy(*inputStream, ostr);
+         code = ostr.str();
+      }
    }
    else
    {
-      // code specified; inject it into a temporary file
+      // determine encoding
+      if (!spec_.encoding().empty())
+          encoding = spec_.encoding();
+   }
+
+   if (!error && !code.empty())
+   {
+      // inject code into a temporary file
       error = FilePath::tempFilePath(tempCode_);
       if (!error)
       {
-         error = writeStringToFile(tempCode_, spec_.code());
+         error = writeStringToFile(tempCode_, code);
       }
 
-      if (error)
-      {
-         // emit the error to the job, and allow it to run with no code (so the only result
-         // will be this error)
-         job_->addOutput("Error writing code to file " + tempCode_.getAbsolutePath() + ": " +
-                         error.getSummary() + "\n", true);
-      }
       path = tempCode_.getAbsolutePath();
    }
+   if (error)
+   {
+      // emit the error to the job, and allow it to run with no code (so the only result
+      // will be this error)
+      job_->addOutput("Error writing code to file " + tempCode_.getAbsolutePath() + ": " +
+                      error.getSummary() + "\n", true);
+   }
 
-   // determine encoding
-   std::string encoding = "UTF-8";
-   if (!spec_.encoding().empty())
-       encoding = spec_.encoding();
-   
    // form the command to send to R
    std::string cmd = "source('" +
                      string_utils::utf8ToSystem(
